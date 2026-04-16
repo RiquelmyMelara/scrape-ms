@@ -8,29 +8,36 @@ from playwright.sync_api import Page
 from . import config
 
 
-# Classic CF sales view. The stats=alltime query param is REQUIRED — without
-# it the page defaults to a narrow timeframe and shows zero rows.
-SALES_PATH = "/contact_purchases?product_name=&stats=alltime"
+# Classic CF sales view. stats=alltime is REQUIRED (otherwise the page defaults
+# to a narrow timeframe and shows zero rows). per_page=100 is the max CF honors.
+PER_PAGE = 100
+SALES_PATH_TMPL = (
+    "/funnels/{fid}/contact_purchases"
+    "?page={page}&per_page={per_page}&product_name=&stats=alltime"
+)
 
 
 def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
-    """Scrape all sales rows for a funnel across all pagination pages."""
+    """Scrape all sales rows for a funnel using URL-based pagination."""
     # Use the funnel URL's origin (workspace subdomain), not the generic one.
     parsed = urlparse(funnel["url"])
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    url = f"{origin}/funnels/{funnel['id']}{SALES_PATH}"
-    page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle")
 
     all_rows: list[dict] = []
     seen: set[str] = set()
     page_num = 1
 
     while True:
+        url = origin + SALES_PATH_TMPL.format(
+            fid=funnel["id"], page=page_num, per_page=PER_PAGE
+        )
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_load_state("networkidle")
+
         try:
             page.wait_for_selector("table tbody tr", timeout=10_000)
         except Exception:
-            print(f"  [{funnel['id']}] no sales table on page {page_num} — stopping")
+            print(f"  [{funnel['id']}] page {page_num}: no table — stopping")
             break
 
         headers = page.eval_on_selector_all(
@@ -42,6 +49,10 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             "rows => rows.map(r => Array.from(r.querySelectorAll('td'))"
             ".map(td => (td.innerText || '').trim()))",
         )
+
+        if not raw_rows:
+            print(f"  [{funnel['id']}] page {page_num}: 0 rows — stopping")
+            break
 
         added = 0
         for cells in raw_rows:
@@ -55,21 +66,19 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             all_rows.append(record)
             added += 1
 
-        print(f"  [{funnel['id']}] page {page_num}: +{added} rows (total {len(all_rows)})")
+        print(
+            f"  [{funnel['id']}] page {page_num}: +{added} rows "
+            f"(fetched {len(raw_rows)}, total {len(all_rows)})"
+        )
 
-        next_btn = page.locator(
-            'a[rel="next"], a.next_page, nav a:has-text("Next")'
-        ).first
-        if next_btn.count() == 0 or not next_btn.is_visible():
+        # Stop conditions:
+        #   - fewer than PER_PAGE rows on the page => last page
+        #   - nothing new added (likely CF clamped page number and returned same set)
+        if len(raw_rows) < PER_PAGE or added == 0:
             break
-        try:
-            next_btn.click()
-            page.wait_for_load_state("networkidle")
-            page_num += 1
-            time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            print(f"  [{funnel['id']}] pagination stopped: {e}")
-            break
+
+        page_num += 1
+        time.sleep(random.uniform(0.5, 1.5))
 
     return all_rows
 
