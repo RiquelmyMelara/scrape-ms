@@ -1,18 +1,24 @@
 import random
 import re
 import time
+from urllib.parse import urlparse
 
 from playwright.sync_api import Page
 
 from . import config
 
 
-SALES_PATH = "/stats/sales"
+# Classic CF sales view. The stats=alltime query param is REQUIRED — without
+# it the page defaults to a narrow timeframe and shows zero rows.
+SALES_PATH = "/contact_purchases?product_name=&stats=alltime"
 
 
 def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
     """Scrape all sales rows for a funnel across all pagination pages."""
-    url = f"{config.BASE_URL}/funnels/{funnel['id']}{SALES_PATH}"
+    # Use the funnel URL's origin (workspace subdomain), not the generic one.
+    parsed = urlparse(funnel["url"])
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    url = f"{origin}/funnels/{funnel['id']}{SALES_PATH}"
     page.goto(url, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle")
 

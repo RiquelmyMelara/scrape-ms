@@ -5,6 +5,7 @@ Prereq: run ./launch_chrome.sh, then log in to ClickFunnels in that Chrome windo
 
 import argparse
 import sys
+from urllib.parse import urlparse
 
 from src import browser, config, funnels, sales, storage
 
@@ -24,11 +25,15 @@ def main() -> None:
     try:
         browser.ensure_logged_in(page)
 
+        # CF redirects post-login to <workspace>-app.clickfunnels.com; use it.
+        parsed = urlparse(page.url)
+        origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else config.BASE_URL
+
         if args.funnel:
             fns = [{
                 "id": args.funnel,
                 "name": f"funnel-{args.funnel}",
-                "url": f"{config.BASE_URL}/funnels/{args.funnel}",
+                "url": f"{origin}/funnels/{args.funnel}",
             }]
         else:
             print("[funnels] enumerating...")
