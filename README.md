@@ -35,38 +35,48 @@ cp .env.example .env                    # then fill in real credentials
    scraper also has an `.env`-based login fallback, but doing it manually is
    safer when 2FA / captcha is in play.
 
-3. **Sanity check** — list detected funnels without scraping:
+3. **Step 1 — enumerate funnels** (saves to `output/funnels.json`):
 
    ```bash
-   .venv/bin/python scrape.py --list-only
+   .venv/bin/python scrape.py --funnels
    ```
 
-4. **Smoke test** one funnel end-to-end:
+4. **Step 2 — scrape sales** for every funnel in that list:
 
    ```bash
-   .venv/bin/python scrape.py --limit 1
+   .venv/bin/python scrape.py --sales
    ```
 
-5. **Full run** (resume-safe; completed funnel IDs are tracked in
-   `output/_state.json`):
+   Or do both in one run: `.venv/bin/python scrape.py --funnels --sales`
+   (this is also what you get with no flags).
+
+5. **Smoke test** a single funnel without enumerating:
 
    ```bash
-   .venv/bin/python scrape.py
+   .venv/bin/python scrape.py --funnel 13500377
    ```
+
+   The sales step is **resume-safe**: completed funnel IDs are tracked in
+   `output/_state.json`. Rerun `--sales` to pick up where it left off.
 
 ## CLI flags
 
 | Flag | Purpose |
 | --- | --- |
-| `--funnel <id>` | Scrape only one funnel by ID |
+| `--funnels` | Enumerate funnels and save `output/funnels.json` |
+| `--sales` | Scrape sales for each funnel in the saved list |
+| `--funnel <id>` | Scrape sales for a single funnel id (implies `--sales`) |
 | `--limit <n>` | Cap number of funnels (testing) |
-| `--list-only` | Enumerate funnels and exit |
+| `--list-only` | Enumerate and print funnels; don't save or scrape |
 | `--no-resume` | Ignore `_state.json` and rescrape everything |
+
+Running with no flags is equivalent to `--funnels --sales`.
 
 ## Output
 
 ```
 output/
+├── funnels.json         enumerated funnels (input to --sales)
 ├── <funnel-id>.csv      one file per funnel
 ├── sales_all.csv        combined file, regenerated at end of each run
 └── _state.json          which funnel IDs are already done

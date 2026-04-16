@@ -43,9 +43,13 @@ python3 -m venv .venv
 # Every session
 ./launch_chrome.sh                          # opens Chrome on :9222
 # — log in to ClickFunnels in that window —
-.venv/bin/python scrape.py --list-only      # verify funnels enumerate
-.venv/bin/python scrape.py --limit 1        # smoke-test one funnel
-.venv/bin/python scrape.py                  # full run (resume-safe)
+.venv/bin/python scrape.py --funnels        # step 1: enumerate -> funnels.json
+.venv/bin/python scrape.py --sales          # step 2: scrape sales (resume-safe)
+
+# Shortcuts
+.venv/bin/python scrape.py --list-only      # enumerate + print, don't save
+.venv/bin/python scrape.py --funnel <id>    # sales for a single funnel
+.venv/bin/python scrape.py                  # = --funnels --sales
 ```
 
 State lives in `output/_state.json`. To force a rescrape use `--no-resume` or

@@ -15,6 +15,7 @@ FUNNELS_URL = f"{BASE_URL}/funnels"
 
 OUTPUT_DIR = ROOT / "output"
 STATE_FILE = OUTPUT_DIR / "_state.json"
+FUNNELS_FILE = OUTPUT_DIR / "funnels.json"
 COMBINED_CSV = OUTPUT_DIR / "sales_all.csv"
 
 SALES_FIELDS = [

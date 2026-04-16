@@ -1,6 +1,12 @@
 """ClickFunnels Classic sales scraper.
 
 Prereq: run ./launch_chrome.sh, then log in to ClickFunnels in that Chrome window.
+
+Typical two-step workflow:
+    python scrape.py --funnels     # enumerate funnels -> output/funnels.json
+    python scrape.py --sales       # load funnels.json, scrape each funnel's sales
+Or both in one run:
+    python scrape.py --funnels --sales
 """
 
 import argparse
@@ -11,12 +17,29 @@ from src import browser, config, funnels, sales, storage
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--funnel", help="Scrape only this funnel id")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--funnels", action="store_true",
+                    help="Enumerate funnels and save to output/funnels.json")
+    ap.add_argument("--sales", action="store_true",
+                    help="Scrape sales using the saved funnels list")
+    ap.add_argument("--funnel", help="Scrape sales for a single funnel id (implies --sales)")
     ap.add_argument("--limit", type=int, help="Cap number of funnels (testing)")
-    ap.add_argument("--no-resume", action="store_true", help="Rescrape completed funnels")
-    ap.add_argument("--list-only", action="store_true", help="Enumerate funnels and exit")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="Rescrape funnels even if marked complete in _state.json")
+    ap.add_argument("--list-only", action="store_true",
+                    help="Enumerate funnels and print them, without saving or scraping")
     args = ap.parse_args()
+
+    # If no step flag was provided, do both (backward-compatible default).
+    if not (args.funnels or args.sales or args.funnel or args.list_only):
+        args.funnels = True
+        args.sales = True
+
+    # --funnel <id> implies we want sales for that one funnel.
+    if args.funnel:
+        args.sales = True
 
     storage.ensure_output()
     state = {"completed": []} if args.no_resume else storage.load_state()
@@ -29,21 +52,15 @@ def main() -> None:
         parsed = urlparse(page.url)
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else config.BASE_URL
 
-        if args.funnel:
-            fns = [{
-                "id": args.funnel,
-                "name": f"funnel-{args.funnel}",
-                "url": f"{origin}/funnels/{args.funnel}",
-            }]
-        else:
-            print("[funnels] enumerating...")
-            fns = funnels.list_funnels(page)
-            print(f"[funnels] total: {len(fns)}")
+        fns = _resolve_funnels(args, page, origin)
 
         if args.list_only:
             for f in fns:
                 print(f"  {f['id']}\t{f['name']}")
             return
+
+        if not args.sales:
+            return  # --funnels only
 
         if args.limit:
             fns = fns[: args.limit]
@@ -68,6 +85,30 @@ def main() -> None:
             pw.stop()
         except Exception:
             pass
+
+
+def _resolve_funnels(args, page, origin: str) -> list[dict]:
+    """Return the list of funnels to act on, based on flags."""
+    if args.funnel:
+        return [{
+            "id": args.funnel,
+            "name": f"funnel-{args.funnel}",
+            "url": f"{origin}/funnels/{args.funnel}",
+        }]
+
+    if args.funnels or args.list_only:
+        print("[funnels] enumerating...")
+        fns = funnels.list_funnels(page)
+        print(f"[funnels] total: {len(fns)}")
+        if args.funnels:
+            storage.save_funnels(fns)
+            print(f"[funnels] saved -> {config.FUNNELS_FILE}")
+        return fns
+
+    # --sales without --funnels: load from disk.
+    fns = storage.load_funnels()
+    print(f"[funnels] loaded {len(fns)} from {config.FUNNELS_FILE}")
+    return fns
 
 
 if __name__ == "__main__":

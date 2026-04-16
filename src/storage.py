@@ -46,3 +46,15 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     config.STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def save_funnels(funnels: list[dict]) -> None:
+    config.FUNNELS_FILE.write_text(json.dumps(funnels, indent=2))
+
+
+def load_funnels() -> list[dict]:
+    if not config.FUNNELS_FILE.exists():
+        raise FileNotFoundError(
+            f"{config.FUNNELS_FILE} not found. Run `scrape.py --funnels` first."
+        )
+    return json.loads(config.FUNNELS_FILE.read_text())
