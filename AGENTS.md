@@ -45,10 +45,11 @@ python3 -m venv .venv
 # — log in to ClickFunnels in that window —
 .venv/bin/python scrape.py --funnels        # step 1: enumerate -> funnels.json
 .venv/bin/python scrape.py --sales          # step 2: scrape sales (resume-safe)
+.venv/bin/python scrape.py --enrich         # step 3: add purchase_timestamp per row
 
 # Shortcuts
 .venv/bin/python scrape.py --list-only      # enumerate + print, don't save
-.venv/bin/python scrape.py --funnel <id>    # sales for a single funnel
+.venv/bin/python scrape.py --funnel <id>    # act on a single funnel only
 .venv/bin/python scrape.py                  # = --funnels --sales
 ```
 
@@ -63,7 +64,8 @@ delete the file.
 | `src/config.py` | env, URLs, field list | adding config knobs |
 | `src/browser.py` | CDP attach + login fallback | CF login DOM changes |
 | `src/funnels.py` | enumerate funnels from `/funnels` | funnel-list DOM changes |
-| `src/sales.py` | per-funnel `stats/sales` scrape + pagination | sales-table DOM changes |
+| `src/sales.py` | per-funnel `contact_purchases` scrape + pagination | sales-table DOM changes |
+| `src/enrich.py` | visit `/contact_profiles/<id>/purchases`, add `purchase_timestamp` | contact profile DOM changes |
 | `src/storage.py` | per-funnel CSV, combined CSV, state | changing output format |
 | `debug_inspect.py` | dev-only DOM dumper | iterating on selectors |
 

@@ -21,12 +21,14 @@ COMBINED_CSV = OUTPUT_DIR / "sales_all.csv"
 SALES_FIELDS = [
     "order_id",
     "date",
+    "purchase_timestamp",  # filled by --enrich from contact profile
     "customer_name",
     "email",
     "product",
     "amount",
     "currency",
     "status",
+    "contact_id",
     "funnel_id",
     "funnel_name",
 ]

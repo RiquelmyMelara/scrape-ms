@@ -2,18 +2,19 @@
 
 Prereq: run ./launch_chrome.sh, then log in to ClickFunnels in that Chrome window.
 
-Typical two-step workflow:
+Typical three-step workflow:
     python scrape.py --funnels     # enumerate funnels -> output/funnels.json
-    python scrape.py --sales       # load funnels.json, scrape each funnel's sales
-Or both in one run:
-    python scrape.py --funnels --sales
+    python scrape.py --sales       # scrape each funnel's sales -> per-funnel CSVs
+    python scrape.py --enrich      # visit contact profiles to add purchase timestamps
+Or in one run:
+    python scrape.py --funnels --sales --enrich
 """
 
 import argparse
 import sys
 from urllib.parse import urlparse
 
-from src import browser, config, funnels, sales, storage
+from src import browser, config, enrich, funnels, sales, storage
 
 
 def main() -> None:
@@ -24,7 +25,9 @@ def main() -> None:
                     help="Enumerate funnels and save to output/funnels.json")
     ap.add_argument("--sales", action="store_true",
                     help="Scrape sales using the saved funnels list")
-    ap.add_argument("--funnel", help="Scrape sales for a single funnel id (implies --sales)")
+    ap.add_argument("--enrich", action="store_true",
+                    help="Add purchase_timestamp to each sales CSV via contact profiles")
+    ap.add_argument("--funnel", help="Operate on a single funnel id only")
     ap.add_argument("--limit", type=int, help="Cap number of funnels (testing)")
     ap.add_argument("--no-resume", action="store_true",
                     help="Rescrape funnels even if marked complete in _state.json")
@@ -32,13 +35,14 @@ def main() -> None:
                     help="Enumerate funnels and print them, without saving or scraping")
     args = ap.parse_args()
 
-    # If no step flag was provided, do both (backward-compatible default).
-    if not (args.funnels or args.sales or args.funnel or args.list_only):
+    # If no step flag was provided, default to --funnels + --sales (enrich is opt-in).
+    if not (args.funnels or args.sales or args.enrich or args.funnel or args.list_only):
         args.funnels = True
         args.sales = True
 
-    # --funnel <id> implies we want sales for that one funnel.
-    if args.funnel:
+    # --funnel <id> on its own means "act on just this funnel" for whatever
+    # steps are selected. If no step is selected alongside it, default to --sales.
+    if args.funnel and not (args.sales or args.enrich or args.funnels or args.list_only):
         args.sales = True
 
     storage.ensure_output()
@@ -59,27 +63,40 @@ def main() -> None:
                 print(f"  {f['id']}\t{f['name']}")
             return
 
-        if not args.sales:
-            return  # --funnels only
-
         if args.limit:
             fns = fns[: args.limit]
 
-        for f in fns:
-            if f["id"] in state["completed"]:
-                print(f"[skip] {f['id']} already scraped")
-                continue
-            print(f"[scrape] {f['id']} — {f['name']}")
-            try:
-                rows = sales.scrape_funnel_sales(page, f)
-                storage.write_rows(f["id"], rows)
-                state["completed"].append(f["id"])
-                storage.save_state(state)
-            except Exception as e:
-                print(f"  [error] {f['id']}: {e}", file=sys.stderr)
+        if args.sales:
+            for f in fns:
+                if f["id"] in state["completed"]:
+                    print(f"[skip] {f['id']} already scraped")
+                    continue
+                print(f"[scrape] {f['id']} — {f['name']}")
+                try:
+                    rows = sales.scrape_funnel_sales(page, f)
+                    storage.write_rows(f["id"], rows)
+                    state["completed"].append(f["id"])
+                    storage.save_state(state)
+                except Exception as e:
+                    print(f"  [error] {f['id']}: {e}", file=sys.stderr)
 
-        total = storage.write_combined()
-        print(f"[done] combined CSV: {config.COMBINED_CSV} ({total} rows)")
+        if args.enrich:
+            enriched_state = state.setdefault("enriched", [])
+            for f in fns:
+                if f["id"] in enriched_state:
+                    print(f"[skip-enrich] {f['id']} already enriched")
+                    continue
+                print(f"[enrich] {f['id']} — {f['name']}")
+                try:
+                    enrich.enrich_funnel_csv(page, f["id"], origin)
+                    enriched_state.append(f["id"])
+                    storage.save_state(state)
+                except Exception as e:
+                    print(f"  [error] {f['id']}: {e}", file=sys.stderr)
+
+        if args.sales or args.enrich:
+            total = storage.write_combined()
+            print(f"[done] combined CSV: {config.COMBINED_CSV} ({total} rows)")
     finally:
         try:
             pw.stop()

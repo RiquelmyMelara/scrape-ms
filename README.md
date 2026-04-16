@@ -65,12 +65,14 @@ cp .env.example .env                    # then fill in real credentials
 | --- | --- |
 | `--funnels` | Enumerate funnels and save `output/funnels.json` |
 | `--sales` | Scrape sales for each funnel in the saved list |
-| `--funnel <id>` | Scrape sales for a single funnel id (implies `--sales`) |
+| `--enrich` | Visit contact profiles to fill in `purchase_timestamp` on each sales row |
+| `--funnel <id>` | Operate on a single funnel id (combines with other step flags) |
 | `--limit <n>` | Cap number of funnels (testing) |
 | `--list-only` | Enumerate and print funnels; don't save or scrape |
-| `--no-resume` | Ignore `_state.json` and rescrape everything |
+| `--no-resume` | Ignore `_state.json` and rescrape/re-enrich everything |
 
-Running with no flags is equivalent to `--funnels --sales`.
+Running with no flags is equivalent to `--funnels --sales`. `--enrich` is
+opt-in because it makes one extra request per unique contact.
 
 ## Output
 

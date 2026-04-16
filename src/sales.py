@@ -44,10 +44,17 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             "table thead th",
             "ths => ths.map(th => (th.innerText || '').trim().toLowerCase())",
         )
+        # Extract cells + any per-row link to /contact_profiles/<id>/...
         raw_rows = page.eval_on_selector_all(
             "table tbody tr",
-            "rows => rows.map(r => Array.from(r.querySelectorAll('td'))"
-            ".map(td => (td.innerText || '').trim()))",
+            """rows => rows.map(r => ({
+                cells: Array.from(r.querySelectorAll('td'))
+                    .map(td => (td.innerText || '').trim()),
+                contactHref: (() => {
+                    const a = r.querySelector('a[href*="/contact_profiles/"]');
+                    return a ? a.getAttribute('href') : '';
+                })()
+            }))""",
         )
 
         if not raw_rows:
@@ -55,10 +62,11 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             break
 
         added = 0
-        for cells in raw_rows:
-            record = _map_row(cells, headers, funnel)
+        for row_data in raw_rows:
+            record = _map_row(row_data["cells"], headers, funnel)
             if not record:
                 continue
+            record["contact_id"] = _extract_contact_id(row_data.get("contactHref", ""))
             key = record.get("order_id") or f"{funnel['id']}-p{page_num}-{added}"
             if key in seen:
                 continue
@@ -81,6 +89,11 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
         time.sleep(random.uniform(0.5, 1.5))
 
     return all_rows
+
+
+def _extract_contact_id(href: str) -> str:
+    m = re.search(r"/contact_profiles/(\d+)", href or "")
+    return m.group(1) if m else ""
 
 
 def _map_row(cells: list[str], headers: list[str], funnel: dict) -> dict | None:
