@@ -95,8 +95,11 @@ scrape-ms/
 
 ## Troubleshooting
 
-- **`No browser context at http://localhost:9222`** — Chrome isn't running
-  with the debug port. Re-run `./launch_chrome.sh`.
+- **`No browser context at http://localhost:9222`** / **`ECONNREFUSED ... :9222`**
+  — Chrome isn't running with the debug port. Re-run `./launch_chrome.sh`.
+  On Linux, make sure a Chrome/Chromium binary is installed
+  (`google-chrome-stable`, `google-chrome`, `chromium`, or `chromium-browser`),
+  or set `CF_CHROME_BIN=/path/to/chrome`.
 - **Login failed** — 2FA/captcha likely. Log in manually in the Chrome window,
   then rerun.
 - **`funnels total: 0`** — the DOM selectors in `src/funnels.py` don't match

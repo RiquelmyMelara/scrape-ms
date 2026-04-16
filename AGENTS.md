@@ -25,7 +25,7 @@ Plan to iterate.
 
 ## Environment
 
-- macOS (darwin). Python 3.10+ (tested on 3.13).
+- macOS or Linux. Python 3.10+ (tested on 3.12, 3.13).
 - Dependencies: see `requirements.txt`. Install into `.venv/` (already
   gitignored).
 - Chrome is launched via `./launch_chrome.sh`, which uses a **dedicated
