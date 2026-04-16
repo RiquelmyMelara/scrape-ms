@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Output & state
+output/
+
+# IDE / local tooling
+.idea/
+.vscode/
+.claude/
+
+# OS
+.DS_Store

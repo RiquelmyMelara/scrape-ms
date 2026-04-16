@@ -1,0 +1,31 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env", override=True)
+
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
+LOGIN_URL = os.getenv("LOGIN_URL", "https://app.clickfunnels.com/users/sign_in")
+
+CDP_URL = os.getenv("CDP_URL", "http://localhost:9222")
+BASE_URL = "https://app.clickfunnels.com"
+FUNNELS_URL = f"{BASE_URL}/funnels"
+
+OUTPUT_DIR = ROOT / "output"
+STATE_FILE = OUTPUT_DIR / "_state.json"
+COMBINED_CSV = OUTPUT_DIR / "sales_all.csv"
+
+SALES_FIELDS = [
+    "order_id",
+    "date",
+    "customer_name",
+    "email",
+    "product",
+    "amount",
+    "currency",
+    "status",
+    "funnel_id",
+    "funnel_name",
+]
