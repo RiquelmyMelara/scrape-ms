@@ -95,6 +95,10 @@ When something returns 0 rows / 0 funnels:
 - The sales table column headers can vary per funnel (some have coupon /
   refund columns). `_map_row` in `src/sales.py` matches by substring on
   header text — extend its `pick(...)` calls rather than hard-coding indices.
+- The Classic sales view is `/funnels/<id>/contact_purchases`, and it
+  **requires** the `?stats=alltime` query param. Without it the page
+  defaults to a narrow recent-timeframe view and reports 0 rows even when
+  the funnel has orders. Don't "simplify" the URL.
 
 ## Making changes
 
