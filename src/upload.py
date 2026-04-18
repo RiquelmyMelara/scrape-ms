@@ -92,13 +92,23 @@ def _upload_csv(conn, csv_path) -> int:
     if not rows:
         return 0
 
-    values = []
+    # Deduplicate by the unique constraint columns — last row wins
+    # (later rows tend to be more enriched)
+    UNIQUE_KEYS = ("contact_id", "funnel_id", "product", "amount", "date")
+    seen: dict[tuple, dict] = {}
     for row in rows:
+        key = tuple(row.get(k, "") or "" for k in UNIQUE_KEYS)
+        seen[key] = row
+
+    values = []
+    for row in seen.values():
         values.append(tuple(row.get(col, "") or "" for col in INSERT_COLS))
 
     with conn.cursor() as cur:
         execute_values(cur, INSERT_SQL, values, page_size=500)
     conn.commit()
 
-    print(f"  [{csv_path.stem}] {len(values)} rows")
+    dupes = len(rows) - len(values)
+    dupe_msg = f" ({dupes} dupes removed)" if dupes else ""
+    print(f"  [{csv_path.stem}] {len(values)} rows{dupe_msg}")
     return len(values)
