@@ -30,34 +30,56 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
     if not rows:
         return 0
 
-    contact_cache: dict[str, list[dict]] = {}
-    updated = 0
-
+    # Collect unique contact_ids that still need enrichment
+    pending_cids: list[str] = []
+    seen_cids: set[str] = set()
     for row in rows:
         if row.get("purchase_timestamp"):
             continue
         cid = (row.get("contact_id") or "").strip()
-        if not cid:
-            continue
+        if cid and cid not in seen_cids:
+            pending_cids.append(cid)
+            seen_cids.add(cid)
 
-        if cid not in contact_cache:
-            contact_cache[cid] = _fetch_contact_purchases(page, origin, cid)
-            time.sleep(random.uniform(0.4, 1.2))
+    if not pending_cids:
+        print(f"  [{funnel_id}] nothing to enrich")
+        return 0
 
-        match = _match_purchase(row, contact_cache[cid])
-        if match and match.get("timestamp"):
-            row["purchase_timestamp"] = match["timestamp"]
-            updated += 1
+    contact_cache: dict[str, list[dict]] = {}
+    updated = 0
 
-    # Rewrite the CSV with the full field set
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=config.SALES_FIELDS, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
+    for i, cid in enumerate(pending_cids):
+        purchases = _fetch_contact_purchases(page, origin, cid)
+        contact_cache[cid] = purchases
+
+        # Update ALL rows for this contact
+        for row in rows:
+            if row.get("purchase_timestamp"):
+                continue
+            if (row.get("contact_id") or "").strip() != cid:
+                continue
+            match = _match_purchase(row, purchases)
+            if match and match.get("timestamp"):
+                row["purchase_timestamp"] = match["timestamp"]
+                updated += 1
+
+        # Flush to disk after every contact so progress survives interrupts
+        _write_csv(csv_path, rows)
+
+        print(f"    [{funnel_id}] contact {i + 1}/{len(pending_cids)} "
+              f"(id={cid}, matched={bool(purchases)})")
+        time.sleep(random.uniform(0.4, 1.2))
 
     print(f"  [{funnel_id}] enriched {updated}/{len(rows)} rows "
           f"({len(contact_cache)} contact profiles fetched)")
     return updated
+
+
+def _write_csv(csv_path, rows: list[dict]) -> None:
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=config.SALES_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
 
 
 def _fetch_contact_purchases(page: Page, origin: str, contact_id: str) -> list[dict]:

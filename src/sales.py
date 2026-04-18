@@ -44,7 +44,7 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             "table thead th",
             "ths => ths.map(th => (th.innerText || '').trim().toLowerCase())",
         )
-        # Extract cells + any per-row link to /contact_profiles/<id>/...
+        # Extract cells + contact profile link (href + visible text = name)
         raw_rows = page.eval_on_selector_all(
             "table tbody tr",
             """rows => rows.map(r => ({
@@ -53,9 +53,17 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
                 contactHref: (() => {
                     const a = r.querySelector('a[href*="/contact_profiles/"]');
                     return a ? a.getAttribute('href') : '';
+                })(),
+                contactName: (() => {
+                    const a = r.querySelector('a[href*="/contact_profiles/"]');
+                    return a ? (a.innerText || '').trim() : '';
                 })()
             }))""",
         )
+
+        # Log headers once per funnel so we can debug column mapping
+        if page_num == 1:
+            print(f"  [{funnel['id']}] table headers: {headers}")
 
         if not raw_rows:
             print(f"  [{funnel['id']}] page {page_num}: 0 rows — stopping")
@@ -67,6 +75,9 @@ def scrape_funnel_sales(page: Page, funnel: dict) -> list[dict]:
             if not record:
                 continue
             record["contact_id"] = _extract_contact_id(row_data.get("contactHref", ""))
+            # Use contact profile link text as customer_name if header-based pick missed
+            if not record["customer_name"] and row_data.get("contactName"):
+                record["customer_name"] = row_data["contactName"]
             key = record.get("order_id") or f"{funnel['id']}-p{page_num}-{added}"
             if key in seen:
                 continue
