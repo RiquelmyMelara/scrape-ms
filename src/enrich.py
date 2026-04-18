@@ -2,15 +2,14 @@
 
 For each row that has a `contact_id`, visit
     /contact_profiles/<id>/purchases
-and pull the timestamp for the purchase that matches the row
-(by order_id if present, otherwise by product + amount).
+and pull the timestamp for the purchase that matches the row.
+Also backfills customer_name and email from the profile header.
 """
 
 import csv
 import random
 import re
 import time
-from urllib.parse import urlparse
 
 from playwright.sync_api import Page
 
@@ -45,33 +44,37 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
         print(f"  [{funnel_id}] nothing to enrich")
         return 0
 
-    contact_cache: dict[str, list[dict]] = {}
     updated = 0
 
     for i, cid in enumerate(pending_cids):
-        purchases = _fetch_contact_purchases(page, origin, cid)
-        contact_cache[cid] = purchases
+        profile, purchases = _fetch_contact_purchases(page, origin, cid)
 
         # Update ALL rows for this contact
         for row in rows:
-            if row.get("purchase_timestamp"):
-                continue
             if (row.get("contact_id") or "").strip() != cid:
                 continue
-            match = _match_purchase(row, purchases)
-            if match and match.get("timestamp"):
-                row["purchase_timestamp"] = match["timestamp"]
-                updated += 1
+            # Backfill customer_name and email from profile header
+            if not row.get("customer_name") and profile.get("name"):
+                row["customer_name"] = profile["name"]
+            if not row.get("email") and profile.get("email"):
+                row["email"] = profile["email"]
+            # Match and fill timestamp
+            if not row.get("purchase_timestamp"):
+                match = _match_purchase(row, purchases)
+                if match and match.get("timestamp"):
+                    row["purchase_timestamp"] = match["timestamp"]
+                    updated += 1
 
         # Flush to disk after every contact so progress survives interrupts
         _write_csv(csv_path, rows)
 
         print(f"    [{funnel_id}] contact {i + 1}/{len(pending_cids)} "
-              f"(id={cid}, matched={bool(purchases)})")
+              f"(id={cid}, name={profile.get('name', '?')}, "
+              f"purchases={len(purchases)})")
         time.sleep(random.uniform(0.4, 1.2))
 
     print(f"  [{funnel_id}] enriched {updated}/{len(rows)} rows "
-          f"({len(contact_cache)} contact profiles fetched)")
+          f"({len(pending_cids)} contact profiles fetched)")
     return updated
 
 
@@ -82,87 +85,141 @@ def _write_csv(csv_path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
-def _fetch_contact_purchases(page: Page, origin: str, contact_id: str) -> list[dict]:
-    """Return [{order_id, product, amount, timestamp, raw_cells}, ...] for a contact."""
-    url = f"{origin}/contact_profiles/{contact_id}/purchases"
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-        page.wait_for_load_state("networkidle", timeout=20_000)
-    except Exception as e:
-        print(f"    [{contact_id}] goto failed: {e}")
-        return []
+def _fetch_contact_purchases(
+    page: Page, origin: str, contact_id: str
+) -> tuple[dict, list[dict]]:
+    """Return (profile_info, purchases_list) for a contact.
 
-    try:
-        page.wait_for_selector("table tbody tr", timeout=10_000)
-    except Exception:
-        return []
+    profile_info: {name, email}
+    purchases_list: [{timestamp, product, amount, status, funnel}, ...]
+    """
+    profile: dict = {"name": "", "email": ""}
+    all_purchases: list[dict] = []
+    page_num = 1
 
-    headers = page.eval_on_selector_all(
-        "table thead th",
-        "ths => ths.map(th => (th.innerText || '').trim().toLowerCase())",
-    )
-    raw = page.eval_on_selector_all(
-        "table tbody tr",
-        "rows => rows.map(r => Array.from(r.querySelectorAll('td'))"
-        ".map(td => (td.innerText || '').trim()))",
-    )
+    while True:
+        url = f"{origin}/contact_profiles/{contact_id}/purchases?page={page_num}"
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            page.wait_for_load_state("networkidle", timeout=20_000)
+        except Exception as e:
+            print(f"    [{contact_id}] goto failed: {e}")
+            return profile, all_purchases
 
-    purchases = []
-    for cells in raw:
-        by_hdr = dict(zip(headers, cells)) if headers else {}
+        # Extract name + email from profile header (first page only)
+        if page_num == 1:
+            profile = page.evaluate("""() => {
+                const contentDiv = document.querySelector('h2.ui.header div.content');
+                let name = '';
+                let email = '';
+                if (contentDiv) {
+                    // Name is the first text node inside div.content
+                    for (const node of contentDiv.childNodes) {
+                        if (node.nodeType === 3) {
+                            const t = node.textContent.trim();
+                            if (t) { name = t; break; }
+                        }
+                    }
+                    // Email is in div.sub.header (or just below the name)
+                    const sub = contentDiv.querySelector('.sub.header, .sub');
+                    if (sub) email = sub.textContent.trim();
+                }
+                return {name, email};
+            }""")
 
-        def pick(*keys: str) -> str:
-            for k in keys:
-                for h, v in by_hdr.items():
-                    if k in h:
-                        return v
-            return ""
+        # Extract purchase rows
+        try:
+            page.wait_for_selector("table tbody tr", timeout=10_000)
+        except Exception:
+            break
 
-        purchases.append({
-            "order_id": pick("order", "#", " id"),
-            "product": pick("product", "item", "name"),
-            "amount": pick("amount", "total", "price"),
-            # Prefer full timestamp column ("created at", "purchased at", "date")
-            "timestamp": pick("created at", "purchased at", "timestamp", "date at", "date"),
-            "raw": cells,
-        })
-    return purchases
+        raw = page.eval_on_selector_all(
+            "table tbody tr",
+            """rows => rows.map(r => {
+                const cells = Array.from(r.querySelectorAll('td'));
+                // Precise timestamp lives in div.ui.small.grey.text inside first td
+                const tsEl = r.querySelector('.ui.small.grey.text, .ui.small.gray.text');
+                return {
+                    cells: cells.map(td => (td.innerText || '').trim()),
+                    timestamp: tsEl ? tsEl.textContent.trim() : ''
+                };
+            })""",
+        )
+
+        if not raw:
+            break
+
+        # Table columns: Time | Product | Amount | Status | Funnel
+        for row_data in raw:
+            cells = row_data["cells"]
+            all_purchases.append({
+                "timestamp": row_data["timestamp"],
+                "product": cells[1] if len(cells) > 1 else "",
+                "amount": cells[2] if len(cells) > 2 else "",
+                "status": cells[3] if len(cells) > 3 else "",
+                "funnel": cells[4] if len(cells) > 4 else "",
+            })
+
+        # Pagination: check for a "next" link
+        has_next = page.locator(
+            'a[rel="next"], li.next:not(.disabled) a, a.next_page'
+        ).first
+        if has_next.count() == 0 or not has_next.is_visible():
+            break
+
+        page_num += 1
+        time.sleep(random.uniform(0.3, 0.8))
+
+    return profile, all_purchases
 
 
 def _match_purchase(row: dict, purchases: list[dict]) -> dict | None:
+    """Find the purchase from the contact profile that matches a sales row."""
     if not purchases:
         return None
 
-    # 1. Exact order_id match
-    oid = (row.get("order_id") or "").strip()
-    if oid:
-        for p in purchases:
-            if p.get("order_id") and p["order_id"].strip() == oid:
-                return p
+    row_prod = _norm(row.get("product", ""))
+    row_amt = _num(row.get("amount", ""))
+    row_funnel = _norm(row.get("funnel_name", ""))
 
-    # 2. Product + amount match (loose: substring/normalized)
-    prod = _norm(row.get("product", ""))
-    amt = _num(row.get("amount", ""))
-    if prod or amt:
+    # 1. Product + amount + funnel (tightest)
+    if row_prod and row_amt:
         for p in purchases:
             p_prod = _norm(p.get("product", ""))
             p_amt = _num(p.get("amount", ""))
-            if prod and p_prod and (prod in p_prod or p_prod in prod):
-                if not amt or not p_amt or abs(amt - p_amt) < 0.01:
+            if _substr_match(row_prod, p_prod) and _amt_eq(row_amt, p_amt):
+                return p
+
+    # 2. Product + amount (no funnel)
+    if row_prod:
+        for p in purchases:
+            p_prod = _norm(p.get("product", ""))
+            if _substr_match(row_prod, p_prod):
+                if not row_amt or _amt_eq(row_amt, _num(p.get("amount", ""))):
                     return p
 
     # 3. Amount alone
-    if amt:
+    if row_amt:
         for p in purchases:
             p_amt = _num(p.get("amount", ""))
-            if p_amt and abs(amt - p_amt) < 0.01:
+            if _amt_eq(row_amt, p_amt):
                 return p
 
-    # 4. Fallback: if the contact only has one purchase, assume it's the one
+    # 4. Fallback: single purchase = assume it's the one
     if len(purchases) == 1:
         return purchases[0]
 
     return None
+
+
+def _substr_match(a: str, b: str) -> bool:
+    return bool(a and b and (a in b or b in a))
+
+
+def _amt_eq(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return False
+    return abs(a - b) < 0.01
 
 
 def _norm(s: str) -> str:
