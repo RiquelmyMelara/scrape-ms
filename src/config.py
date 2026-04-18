@@ -13,6 +13,13 @@ CDP_URL = os.getenv("CDP_URL", "http://localhost:9222")
 BASE_URL = "https://app.clickfunnels.com"
 FUNNELS_URL = f"{BASE_URL}/funnels"
 
+# Database (PostgreSQL)
+DB_HOST = os.getenv("DB_HOST", "")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "scrape_ms")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+
 OUTPUT_DIR = ROOT / "output"
 STATE_FILE = OUTPUT_DIR / "_state.json"
 FUNNELS_FILE = OUTPUT_DIR / "funnels.json"

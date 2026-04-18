@@ -46,6 +46,7 @@ python3 -m venv .venv
 .venv/bin/python scrape.py --funnels        # step 1: enumerate -> funnels.json
 .venv/bin/python scrape.py --sales          # step 2: scrape sales (resume-safe)
 .venv/bin/python scrape.py --enrich         # step 3: add purchase_timestamp per row
+.venv/bin/python scrape.py --upload         # step 4: push CSVs to PostgreSQL (no Chrome needed)
 
 # Shortcuts
 .venv/bin/python scrape.py --list-only      # enumerate + print, don't save
@@ -66,6 +67,7 @@ delete the file.
 | `src/funnels.py` | enumerate funnels from `/funnels` | funnel-list DOM changes |
 | `src/sales.py` | per-funnel `contact_purchases` scrape + pagination | sales-table DOM changes |
 | `src/enrich.py` | visit `/contact_profiles/<id>/purchases`, add `purchase_timestamp` | contact profile DOM changes |
+| `src/upload.py` | upsert per-funnel CSVs into PostgreSQL `sales` table | schema changes |
 | `src/storage.py` | per-funnel CSV, combined CSV, state | changing output format |
 | `debug_inspect.py` | dev-only DOM dumper | iterating on selectors |
 
