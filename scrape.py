@@ -107,7 +107,7 @@ def main() -> None:
 
         if args.upload:
             print("[upload] pushing to PostgreSQL...")
-            upload.upload_all_csvs()
+            upload.upload_csvs(funnel_id=args.funnel)
     finally:
         if pw:
             try:

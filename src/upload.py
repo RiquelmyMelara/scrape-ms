@@ -60,18 +60,24 @@ def ensure_table(conn) -> None:
     conn.commit()
 
 
-def upload_all_csvs() -> int:
-    """Read every per-funnel CSV and upsert into the sales table. Returns total rows upserted."""
+def upload_csvs(funnel_id: str | None = None) -> int:
+    """Upsert CSVs into the sales table. If funnel_id is given, upload only that one."""
     conn = get_connection()
     try:
         ensure_table(conn)
         total = 0
 
-        for csv_path in sorted(config.OUTPUT_DIR.glob("*.csv")):
-            if csv_path.name == config.COMBINED_CSV.name or csv_path.name.startswith("_"):
-                continue
-            count = _upload_csv(conn, csv_path)
-            total += count
+        if funnel_id:
+            csv_path = config.OUTPUT_DIR / f"{funnel_id}.csv"
+            if not csv_path.exists():
+                print(f"[upload] {csv_path} not found")
+                return 0
+            total = _upload_csv(conn, csv_path)
+        else:
+            for csv_path in sorted(config.OUTPUT_DIR.glob("*.csv")):
+                if csv_path.name == config.COMBINED_CSV.name or csv_path.name.startswith("_"):
+                    continue
+                total += _upload_csv(conn, csv_path)
 
         print(f"[upload] total: {total} rows upserted")
         return total
