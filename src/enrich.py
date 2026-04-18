@@ -53,8 +53,10 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
         for row in rows:
             if (row.get("contact_id") or "").strip() != cid:
                 continue
-            # Backfill customer_name and email from profile header
-            if not row.get("customer_name") and profile.get("name"):
+            # Always set customer_name from profile — it's the authoritative
+            # source. The sales step's pick("name") often matches a wrong
+            # column (e.g. "Product Name") and fills in junk.
+            if profile.get("name"):
                 row["customer_name"] = profile["name"]
             if not row.get("email") and profile.get("email"):
                 row["email"] = profile["email"]
