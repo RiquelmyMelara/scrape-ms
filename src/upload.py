@@ -1,11 +1,22 @@
 """Upload scraped sales data to PostgreSQL."""
 
 import csv
+import json
 
 import psycopg2
 from psycopg2.extras import execute_values
 
 from . import config
+
+
+def load_upload_state() -> dict:
+    if config.UPLOAD_STATE_FILE.exists():
+        return json.loads(config.UPLOAD_STATE_FILE.read_text())
+    return {"uploaded": []}
+
+
+def save_upload_state(state: dict) -> None:
+    config.UPLOAD_STATE_FILE.write_text(json.dumps(state, indent=2))
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS sales (
@@ -60,9 +71,10 @@ def ensure_table(conn) -> None:
     conn.commit()
 
 
-def upload_csvs(funnel_id: str | None = None) -> int:
+def upload_csvs(funnel_id: str | None = None, no_resume: bool = False) -> int:
     """Upsert CSVs into the sales table. If funnel_id is given, upload only that one."""
     conn = get_connection()
+    state = {"uploaded": []} if no_resume else load_upload_state()
     try:
         ensure_table(conn)
         total = 0
@@ -73,11 +85,20 @@ def upload_csvs(funnel_id: str | None = None) -> int:
                 print(f"[upload] {csv_path} not found")
                 return 0
             total = _upload_csv(conn, csv_path)
+            if funnel_id not in state["uploaded"]:
+                state["uploaded"].append(funnel_id)
+                save_upload_state(state)
         else:
             for csv_path in sorted(config.OUTPUT_DIR.glob("*.csv")):
                 if csv_path.name == config.COMBINED_CSV.name or csv_path.name.startswith("_"):
                     continue
+                fid = csv_path.stem
+                if fid in state["uploaded"]:
+                    print(f"  [{fid}] already uploaded — skipping")
+                    continue
                 total += _upload_csv(conn, csv_path)
+                state["uploaded"].append(fid)
+                save_upload_state(state)
 
         print(f"[upload] total: {total} rows upserted")
         return total

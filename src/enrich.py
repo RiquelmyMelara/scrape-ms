@@ -7,6 +7,7 @@ Also backfills customer_name and email from the profile header.
 """
 
 import csv
+import json
 import random
 import re
 import time
@@ -14,6 +15,17 @@ import time
 from playwright.sync_api import Page
 
 from . import config
+
+
+def load_enrich_state() -> dict:
+    """Return {funnel_id: [processed_contact_ids, ...], ...}."""
+    if config.ENRICH_STATE_FILE.exists():
+        return json.loads(config.ENRICH_STATE_FILE.read_text())
+    return {}
+
+
+def save_enrich_state(state: dict) -> None:
+    config.ENRICH_STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
 def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
@@ -29,19 +41,22 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
     if not rows:
         return 0
 
-    # Collect unique contact_ids that still need enrichment
+    # Load per-contact state — contacts already fetched (even if no match)
+    state = load_enrich_state()
+    done_cids: set[str] = set(state.get(funnel_id, []))
+
+    # Collect unique contact_ids that haven't been fetched yet
     pending_cids: list[str] = []
     seen_cids: set[str] = set()
     for row in rows:
-        if row.get("purchase_timestamp"):
-            continue
         cid = (row.get("contact_id") or "").strip()
-        if cid and cid not in seen_cids:
-            pending_cids.append(cid)
-            seen_cids.add(cid)
+        if not cid or cid in done_cids or cid in seen_cids:
+            continue
+        pending_cids.append(cid)
+        seen_cids.add(cid)
 
     if not pending_cids:
-        print(f"  [{funnel_id}] nothing to enrich")
+        print(f"  [{funnel_id}] nothing to enrich (all {len(done_cids)} contacts already processed)")
         return 0
 
     updated = 0
@@ -67,7 +82,10 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
                     row["purchase_timestamp"] = match["timestamp"]
                     updated += 1
 
-        # Flush to disk after every contact so progress survives interrupts
+        # Mark contact as processed and flush both CSV + state
+        done_cids.add(cid)
+        state[funnel_id] = list(done_cids)
+        save_enrich_state(state)
         _write_csv(csv_path, rows)
 
         print(f"    [{funnel_id}] contact {i + 1}/{len(pending_cids)} "
@@ -76,7 +94,7 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
         time.sleep(random.uniform(0.4, 1.2))
 
     print(f"  [{funnel_id}] enriched {updated}/{len(rows)} rows "
-          f"({len(pending_cids)} contact profiles fetched)")
+          f"({len(pending_cids)} fetched, {len(done_cids)} total processed)")
     return updated
 
 

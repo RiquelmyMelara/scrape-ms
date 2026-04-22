@@ -22,6 +22,8 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 OUTPUT_DIR = ROOT / "output"
 STATE_FILE = OUTPUT_DIR / "_state.json"
+ENRICH_STATE_FILE = OUTPUT_DIR / "_enrich_state.json"
+UPLOAD_STATE_FILE = OUTPUT_DIR / "_upload_state.json"
 FUNNELS_FILE = OUTPUT_DIR / "funnels.json"
 COMBINED_CSV = OUTPUT_DIR / "sales_all.csv"
 

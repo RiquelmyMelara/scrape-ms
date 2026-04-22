@@ -88,16 +88,10 @@ def main() -> None:
                         print(f"  [error] {f['id']}: {e}", file=sys.stderr)
 
             if args.enrich:
-                enriched_state = state.setdefault("enriched", [])
                 for f in fns:
-                    if f["id"] in enriched_state:
-                        print(f"[skip-enrich] {f['id']} already enriched")
-                        continue
                     print(f"[enrich] {f['id']} — {f['name']}")
                     try:
                         enrich.enrich_funnel_csv(page, f["id"], origin)
-                        enriched_state.append(f["id"])
-                        storage.save_state(state)
                     except Exception as e:
                         print(f"  [error] {f['id']}: {e}", file=sys.stderr)
 
@@ -107,7 +101,7 @@ def main() -> None:
 
         if args.upload:
             print("[upload] pushing to PostgreSQL...")
-            upload.upload_csvs(funnel_id=args.funnel)
+            upload.upload_csvs(funnel_id=args.funnel, no_resume=args.no_resume)
     finally:
         if pw:
             try:
