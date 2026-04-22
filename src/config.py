@@ -26,6 +26,13 @@ ENRICH_STATE_FILE = OUTPUT_DIR / "_enrich_state.json"
 UPLOAD_STATE_FILE = OUTPUT_DIR / "_upload_state.json"
 FUNNELS_FILE = OUTPUT_DIR / "funnels.json"
 COMBINED_CSV = OUTPUT_DIR / "sales_all.csv"
+BLACKLIST_CSV = OUTPUT_DIR / "blacklist.csv"
+
+# Names that get moved to the blacklist by --clean (case-insensitive substring match)
+BLACKLIST_NAMES = [
+    "glenn", "luis", "frank", "test", "spam",
+    "mitch", "statbrook", "katherine", "paul", "sean",
+]
 
 SALES_FIELDS = [
     "order_id",

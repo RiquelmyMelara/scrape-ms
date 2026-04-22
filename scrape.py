@@ -15,7 +15,7 @@ import argparse
 import sys
 from urllib.parse import urlparse
 
-from src import browser, config, enrich, funnels, sales, storage, upload
+from src import browser, clean, config, enrich, funnels, sales, storage, upload
 
 
 def main() -> None:
@@ -28,6 +28,8 @@ def main() -> None:
                     help="Scrape sales using the saved funnels list")
     ap.add_argument("--enrich", action="store_true",
                     help="Add purchase_timestamp to each sales CSV via contact profiles")
+    ap.add_argument("--clean", action="store_true",
+                    help="Move blacklisted names to output/blacklist.csv before upload")
     ap.add_argument("--upload", action="store_true",
                     help="Upload all per-funnel CSVs to PostgreSQL (needs DB_* in .env)")
     ap.add_argument("--funnel", help="Operate on a single funnel id only")
@@ -38,8 +40,8 @@ def main() -> None:
                     help="Enumerate funnels and print them, without saving or scraping")
     args = ap.parse_args()
 
-    # If no step flag was provided, default to --funnels + --sales (enrich/upload are opt-in).
-    if not (args.funnels or args.sales or args.enrich or args.upload or args.funnel or args.list_only):
+    # If no step flag was provided, default to --funnels + --sales (others are opt-in).
+    if not (args.funnels or args.sales or args.enrich or args.clean or args.upload or args.funnel or args.list_only):
         args.funnels = True
         args.sales = True
 
@@ -98,6 +100,10 @@ def main() -> None:
             if args.sales or args.enrich:
                 total = storage.write_combined()
                 print(f"[done] combined CSV: {config.COMBINED_CSV} ({total} rows)")
+
+        if args.clean:
+            print("[clean] removing blacklisted names...")
+            clean.clean_csvs(funnel_id=args.funnel)
 
         if args.upload:
             print("[upload] pushing to PostgreSQL...")
