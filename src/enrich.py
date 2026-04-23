@@ -102,7 +102,7 @@ def enrich_funnel_csv(session: requests.Session, funnel_id: str, origin: str) ->
             _write_csv(csv_path, rows)
             batch_count = 0
 
-        if (i + 1) % 100 == 0 or i == len(pending_cids) - 1:
+        if (i + 1) % 20 == 0 or i == len(pending_cids) - 1:
             print(f"    [{funnel_id}] {i + 1}/{len(pending_cids)} contacts processed")
 
     # Final flush
