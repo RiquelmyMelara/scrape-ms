@@ -90,10 +90,12 @@ def main() -> None:
                         print(f"  [error] {f['id']}: {e}", file=sys.stderr)
 
             if args.enrich:
+                print("[enrich] creating HTTP session from browser cookies...")
+                session = enrich.create_session(page)
                 for f in fns:
                     print(f"[enrich] {f['id']} — {f['name']}")
                     try:
-                        enrich.enrich_funnel_csv(page, f["id"], origin)
+                        enrich.enrich_funnel_csv(session, f["id"], origin)
                     except Exception as e:
                         print(f"  [error] {f['id']}: {e}", file=sys.stderr)
 

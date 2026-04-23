@@ -1,24 +1,38 @@
 """Enrich per-funnel sales CSVs with precise purchase timestamps.
 
-For each row that has a `contact_id`, visit
-    /contact_profiles/<id>/purchases
-and pull the timestamp for the purchase that matches the row.
-Also backfills customer_name and email from the profile header.
+Uses direct HTTP requests (with the browser's cookies) instead of full
+page.goto to avoid rendering overhead — ~10x faster per contact.
 """
 
 import csv
 import json
-import random
 import re
 import time
 
+import requests
+from bs4 import BeautifulSoup
 from playwright.sync_api import Page
 
 from . import config
 
+BATCH_SIZE = 50  # flush CSV + state every N contacts
+
+
+def create_session(page: Page) -> requests.Session:
+    """Build a requests.Session that shares the browser's cookies."""
+    session = requests.Session()
+    for c in page.context.cookies():
+        session.cookies.set(
+            c["name"], c["value"],
+            domain=c.get("domain", ""),
+            path=c.get("path", "/"),
+        )
+    ua = page.evaluate("navigator.userAgent")
+    session.headers["User-Agent"] = ua
+    return session
+
 
 def load_enrich_state() -> dict:
-    """Return {funnel_id: [processed_contact_ids, ...], ...}."""
     if config.ENRICH_STATE_FILE.exists():
         return json.loads(config.ENRICH_STATE_FILE.read_text())
     return {}
@@ -28,8 +42,8 @@ def save_enrich_state(state: dict) -> None:
     config.ENRICH_STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
-    """Add `purchase_timestamp` to rows in output/<funnel_id>.csv. Returns count updated."""
+def enrich_funnel_csv(session: requests.Session, funnel_id: str, origin: str) -> int:
+    """Add purchase_timestamp to rows in output/<funnel_id>.csv. Returns count updated."""
     csv_path = config.OUTPUT_DIR / f"{funnel_id}.csv"
     if not csv_path.exists():
         print(f"  [{funnel_id}] no CSV at {csv_path} — skipping")
@@ -41,11 +55,10 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
     if not rows:
         return 0
 
-    # Load per-contact state — contacts already fetched (even if no match)
     state = load_enrich_state()
     done_cids: set[str] = set(state.get(funnel_id, []))
 
-    # Collect unique contact_ids that haven't been fetched yet
+    # Collect unique contact_ids not yet processed
     pending_cids: list[str] = []
     seen_cids: set[str] = set()
     for row in rows:
@@ -56,42 +69,47 @@ def enrich_funnel_csv(page: Page, funnel_id: str, origin: str) -> int:
         seen_cids.add(cid)
 
     if not pending_cids:
-        print(f"  [{funnel_id}] nothing to enrich (all {len(done_cids)} contacts already processed)")
+        print(f"  [{funnel_id}] nothing to enrich "
+              f"(all {len(done_cids)} contacts already processed)")
         return 0
 
     updated = 0
+    batch_count = 0
 
     for i, cid in enumerate(pending_cids):
-        profile, purchases = _fetch_contact_purchases(page, origin, cid)
+        profile, purchases = _fetch_contact_purchases(session, origin, cid)
 
-        # Update ALL rows for this contact
         for row in rows:
             if (row.get("contact_id") or "").strip() != cid:
                 continue
-            # Always set customer_name from profile — it's the authoritative
-            # source. The sales step's pick("name") often matches a wrong
-            # column (e.g. "Product Name") and fills in junk.
             if profile.get("name"):
                 row["customer_name"] = profile["name"]
             if not row.get("email") and profile.get("email"):
                 row["email"] = profile["email"]
-            # Match and fill timestamp
             if not row.get("purchase_timestamp"):
                 match = _match_purchase(row, purchases)
                 if match and match.get("timestamp"):
                     row["purchase_timestamp"] = match["timestamp"]
                     updated += 1
 
-        # Mark contact as processed and flush both CSV + state
         done_cids.add(cid)
+        batch_count += 1
+
+        # Flush every BATCH_SIZE contacts
+        if batch_count >= BATCH_SIZE:
+            state[funnel_id] = list(done_cids)
+            save_enrich_state(state)
+            _write_csv(csv_path, rows)
+            batch_count = 0
+
+        if (i + 1) % 100 == 0 or i == len(pending_cids) - 1:
+            print(f"    [{funnel_id}] {i + 1}/{len(pending_cids)} contacts processed")
+
+    # Final flush
+    if batch_count > 0:
         state[funnel_id] = list(done_cids)
         save_enrich_state(state)
         _write_csv(csv_path, rows)
-
-        print(f"    [{funnel_id}] contact {i + 1}/{len(pending_cids)} "
-              f"(id={cid}, name={profile.get('name', '?')}, "
-              f"purchases={len(purchases)})")
-        time.sleep(random.uniform(0.4, 1.2))
 
     print(f"  [{funnel_id}] enriched {updated}/{len(rows)} rows "
           f"({len(pending_cids)} fetched, {len(done_cids)} total processed)")
@@ -106,13 +124,9 @@ def _write_csv(csv_path, rows: list[dict]) -> None:
 
 
 def _fetch_contact_purchases(
-    page: Page, origin: str, contact_id: str
+    session: requests.Session, origin: str, contact_id: str
 ) -> tuple[dict, list[dict]]:
-    """Return (profile_info, purchases_list) for a contact.
-
-    profile_info: {name, email}
-    purchases_list: [{timestamp, product, amount, status, funnel}, ...]
-    """
+    """Fetch contact profile + purchases via HTTP. Returns (profile, purchases)."""
     profile: dict = {"name": "", "email": ""}
     all_purchases: list[dict] = []
     page_num = 1
@@ -120,112 +134,103 @@ def _fetch_contact_purchases(
     while True:
         url = f"{origin}/contact_profiles/{contact_id}/purchases?page={page_num}"
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-            page.wait_for_load_state("networkidle", timeout=20_000)
-        except Exception as e:
-            print(f"    [{contact_id}] goto failed: {e}")
-            return profile, all_purchases
+            resp = session.get(url, timeout=15)
+            if resp.status_code != 200:
+                print(f"    [{contact_id}] HTTP {resp.status_code}")
+                break
+        except requests.RequestException as e:
+            print(f"    [{contact_id}] request failed: {e}")
+            break
+
+        soup = BeautifulSoup(resp.text, "html.parser")
 
         # Extract name + email from profile header (first page only)
         if page_num == 1:
-            profile = page.evaluate("""() => {
-                const contentDiv = document.querySelector('h2.ui.header div.content');
-                let name = '';
-                let email = '';
-                if (contentDiv) {
-                    // Name is the first text node inside div.content
-                    for (const node of contentDiv.childNodes) {
-                        if (node.nodeType === 3) {
-                            const t = node.textContent.trim();
-                            if (t) { name = t; break; }
-                        }
-                    }
-                    // Email is in div.sub.header (or just below the name)
-                    const sub = contentDiv.querySelector('.sub.header, .sub');
-                    if (sub) email = sub.textContent.trim();
-                }
-                return {name, email};
-            }""")
+            profile = _parse_profile(soup)
 
         # Extract purchase rows
-        try:
-            page.wait_for_selector("table tbody tr", timeout=10_000)
-        except Exception:
+        purchases = _parse_purchases(soup)
+        if not purchases:
             break
+        all_purchases.extend(purchases)
 
-        raw = page.eval_on_selector_all(
-            "table tbody tr",
-            """rows => rows.map(r => {
-                const cells = Array.from(r.querySelectorAll('td'));
-                // Precise timestamp lives in div.ui.small.grey.text inside first td
-                const tsEl = r.querySelector('.ui.small.grey.text, .ui.small.gray.text');
-                return {
-                    cells: cells.map(td => (td.innerText || '').trim()),
-                    timestamp: tsEl ? tsEl.textContent.trim() : ''
-                };
-            })""",
-        )
-
-        if not raw:
-            break
-
-        # Table columns: Time | Product | Amount | Status | Funnel
-        for row_data in raw:
-            cells = row_data["cells"]
-            all_purchases.append({
-                "timestamp": row_data["timestamp"],
-                "product": cells[1] if len(cells) > 1 else "",
-                "amount": cells[2] if len(cells) > 2 else "",
-                "status": cells[3] if len(cells) > 3 else "",
-                "funnel": cells[4] if len(cells) > 4 else "",
-            })
-
-        # Pagination: check for a "next" link
-        has_next = page.locator(
-            'a[rel="next"], li.next:not(.disabled) a, a.next_page'
-        ).first
-        if has_next.count() == 0 or not has_next.is_visible():
+        # Check for next page link
+        if not soup.select_one('a[rel="next"], li.next:not(.disabled) a'):
             break
 
         page_num += 1
-        time.sleep(random.uniform(0.3, 0.8))
 
     return profile, all_purchases
 
 
+def _parse_profile(soup: BeautifulSoup) -> dict:
+    """Extract name and email from the h2.ui.header on the profile page."""
+    name = ""
+    email = ""
+    content_div = soup.select_one("h2.ui.header div.content")
+    if content_div:
+        # Name is the first direct text node
+        for node in content_div.children:
+            if isinstance(node, str):
+                t = node.strip()
+                if t:
+                    name = t
+                    break
+        # Email is in the sub header
+        sub = content_div.select_one(".sub.header, .sub")
+        if sub:
+            email = sub.get_text(strip=True)
+    return {"name": name, "email": email}
+
+
+def _parse_purchases(soup: BeautifulSoup) -> list[dict]:
+    """Extract purchase rows from the table."""
+    purchases = []
+    for tr in soup.select("table tbody tr"):
+        cells = [td.get_text(strip=True) for td in tr.select("td")]
+        # Precise timestamp from div.ui.small.grey.text (or gray)
+        ts_el = tr.select_one(".ui.small.grey.text, .ui.small.gray.text")
+        timestamp = ts_el.get_text(strip=True) if ts_el else ""
+
+        # Table columns: Time | Product | Amount | Status | Funnel
+        purchases.append({
+            "timestamp": timestamp,
+            "product": cells[1] if len(cells) > 1 else "",
+            "amount": cells[2] if len(cells) > 2 else "",
+            "status": cells[3] if len(cells) > 3 else "",
+            "funnel": cells[4] if len(cells) > 4 else "",
+        })
+    return purchases
+
+
 def _match_purchase(row: dict, purchases: list[dict]) -> dict | None:
-    """Find the purchase from the contact profile that matches a sales row."""
     if not purchases:
         return None
 
     row_prod = _norm(row.get("product", ""))
     row_amt = _num(row.get("amount", ""))
-    row_funnel = _norm(row.get("funnel_name", ""))
 
-    # 1. Product + amount + funnel (tightest)
+    # 1. Product + amount
     if row_prod and row_amt:
         for p in purchases:
-            p_prod = _norm(p.get("product", ""))
-            p_amt = _num(p.get("amount", ""))
-            if _substr_match(row_prod, p_prod) and _amt_eq(row_amt, p_amt):
+            if _substr_match(row_prod, _norm(p.get("product", ""))) \
+               and _amt_eq(row_amt, _num(p.get("amount", ""))):
                 return p
 
-    # 2. Product + amount (no funnel)
+    # 2. Product alone
     if row_prod:
         for p in purchases:
-            p_prod = _norm(p.get("product", ""))
-            if _substr_match(row_prod, p_prod):
+            if _substr_match(row_prod, _norm(p.get("product", ""))):
                 if not row_amt or _amt_eq(row_amt, _num(p.get("amount", ""))):
                     return p
 
     # 3. Amount alone
     if row_amt:
         for p in purchases:
-            p_amt = _num(p.get("amount", ""))
-            if _amt_eq(row_amt, p_amt):
+            if _amt_eq(row_amt, _num(p.get("amount", ""))):
                 return p
 
-    # 4. Fallback: single purchase = assume it's the one
+    # 4. Single purchase fallback
     if len(purchases) == 1:
         return purchases[0]
 
