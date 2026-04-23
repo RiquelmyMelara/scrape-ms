@@ -16,6 +16,7 @@ from playwright.sync_api import Page
 from . import config
 
 BATCH_SIZE = 50  # flush CSV + state every N contacts
+MAX_CONSECUTIVE_ERRORS = 5  # circuit breaker — stop after this many errors in a row
 
 
 def create_session(page: Page) -> requests.Session:
@@ -75,9 +76,21 @@ def enrich_funnel_csv(session: requests.Session, funnel_id: str, origin: str) ->
 
     updated = 0
     batch_count = 0
+    consecutive_errors = 0
 
     for i, cid in enumerate(pending_cids):
-        profile, purchases = _fetch_contact_purchases(session, origin, cid)
+        ok, profile, purchases = _fetch_contact_purchases(session, origin, cid)
+
+        if not ok:
+            consecutive_errors += 1
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                print(f"  [{funnel_id}] circuit breaker: "
+                      f"{consecutive_errors} consecutive errors — stopping. "
+                      f"Flushing progress and exiting.")
+                break
+            continue
+        else:
+            consecutive_errors = 0
 
         for row in rows:
             if (row.get("contact_id") or "").strip() != cid:
@@ -125,8 +138,11 @@ def _write_csv(csv_path, rows: list[dict]) -> None:
 
 def _fetch_contact_purchases(
     session: requests.Session, origin: str, contact_id: str
-) -> tuple[dict, list[dict]]:
-    """Fetch contact profile + purchases via HTTP. Returns (profile, purchases)."""
+) -> tuple[bool, dict, list[dict]]:
+    """Fetch contact profile + purchases via HTTP.
+
+    Returns (ok, profile, purchases). ok=False on connection/Cloudflare errors.
+    """
     profile: dict = {"name": "", "email": ""}
     all_purchases: list[dict] = []
     page_num = 1
@@ -135,12 +151,18 @@ def _fetch_contact_purchases(
         url = f"{origin}/contact_profiles/{contact_id}/purchases?page={page_num}"
         try:
             resp = session.get(url, timeout=15)
+            if resp.status_code == 403 or resp.status_code == 429:
+                print(f"    [{contact_id}] HTTP {resp.status_code} — blocked/rate-limited")
+                return False, profile, all_purchases
+            if resp.status_code >= 500:
+                print(f"    [{contact_id}] HTTP {resp.status_code} — server error")
+                return False, profile, all_purchases
             if resp.status_code != 200:
                 print(f"    [{contact_id}] HTTP {resp.status_code}")
                 break
         except requests.RequestException as e:
             print(f"    [{contact_id}] request failed: {e}")
-            break
+            return False, profile, all_purchases
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -160,7 +182,7 @@ def _fetch_contact_purchases(
 
         page_num += 1
 
-    return profile, all_purchases
+    return True, profile, all_purchases
 
 
 def _parse_profile(soup: BeautifulSoup) -> dict:
